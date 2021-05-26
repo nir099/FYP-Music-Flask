@@ -8,14 +8,14 @@ from datetime import datetime
 tf.disable_eager_execution()
 from crop_image import default
 
-%config InlineBackend.figure_format = 'retina'
+# %config InlineBackend.figure_format = 'retina'
 
-import pretty_midi as pm
-import librosa     as lbr
-from   librosa.display     import specshow
+# import pretty_midi as pm
+# import librosa     as lbr
+# from   librosa.display     import specshow
 
-from keras.models          import load_model
-from keras.utils.vis_utils import model_to_dot
+# from keras.models          import load_model
+# from keras.utils.vis_utils import model_to_dot
 
 ################## flask 
 from flask import Flask
