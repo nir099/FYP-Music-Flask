@@ -59,7 +59,7 @@ from botocore.exceptions import ClientError
 
 
 
-def upload_sheetMusic_Midi_file(file_name, bucket, object_name=None, userId, imageId, sheetMusicId):
+def upload_sheetMusic_Midi_file(file_name, bucket,userId, imageId, sheetMusicId, object_name=None):
     # If S3 object_name was not specified, use file_name
     if object_name is None:
         object_name = file_name
@@ -140,7 +140,7 @@ def sheetMusic(userId, sheetMusicId):
     binfile = open("output/output" + userId + imageId + ".mid", 'wb')
     midix.writeFile(binfile)
     binfile.close()
-    success = upload_sheetMusic_Midi_file(binfile, 'fypbucket105550-dev', 'public/' + userId + '/sheetMidi/'+ imageId , userId, imageId, sheetMusicId)
+    success = upload_sheetMusic_Midi_file(binfile, 'fypbucket105550-dev', userId, imageId, sheetMusicId,  'public/' + userId + '/sheetMidi/'+ imageId )
     return success
 
 if __name__ == '__main__':
