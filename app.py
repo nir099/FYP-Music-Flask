@@ -24,8 +24,6 @@ import boto3
 tf.reset_default_graph()
 sess = tf.InteractiveSession()
 
-python omr_predict.py -image Data/Example/mary.jpg -single false
-
 # Read the dictionary
 dict_file = open('Data/vocabulary_semantic.txt','r')
 dict_list = dict_file.read().splitlines()
