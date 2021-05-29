@@ -1,25 +1,15 @@
 import omr_utils
 import cv2
 import numpy as np
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 from midi.player import *
 from midiutil.MidiFile import MIDIFile
 from datetime import datetime
-tf.disable_eager_execution()
+
 from crop_image import default
-
-# %config InlineBackend.figure_format = 'retina'
-
-# import pretty_midi as pm
-# import librosa     as lbr
-# from   librosa.display     import specshow
-
-# from keras.models          import load_model
-# from keras.utils.vis_utils import model_to_dot
-
-################## flask 
 from flask import Flask
 import boto3
+import audioProcess
 
 tf.reset_default_graph()
 sess = tf.InteractiveSession()
@@ -54,32 +44,60 @@ app = Flask(__name__)
 s3 = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 sheetMusicTable = dynamodb.Table('Sheet-zo3cmm6a6fblhpk6g4trt53aju-dev')
-audioTable = dynamodb.Table('')
+audioTable = dynamodb.Table('Audio-zo3cmm6a6fblhpk6g4trt53aju-dev')
+bucketName = 'fypbucket105550-dev'
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Key, Attr
 
 
-
-def upload_sheetMusic_Midi_file(file_name, bucket,userId, imageId, sheetMusicId, object_name=None):
+def upload_sheetMusic_Midi_file(file_name,userId, sheetMusicId, object_name=None):
     # If S3 object_name was not specified, use file_name
     if object_name is None:
         object_name = file_name
 
     # Upload the file
     try:
-        response = s3.upload_file(file_name, bucket, object_name)
-        table.update_item(
+        response = s3.upload_file(file_name, bucketName, object_name)
+        sheetMusicTable.update_item(
             Key={
                 'id': sheetMusicId,
             },
             UpdateExpression='SET midiLink = :val1',
             ExpressionAttributeValues={
-                ':val1': userId + '/sheetMidi/'+ imageId
+                ':val1': userId + '/sheetMidi/'+ file_name
             }
         )
     except ClientError as e:
         logging.error(e)
         return False
     return True
+
+def upload_audio_Midi_file(file_name,userId, audioId, object_name=None):
+    # If S3 object_name was not specified, use file_name
+    if object_name is None:
+        object_name = file_name
+
+    # Upload the file
+    try:
+        response = s3.upload_file(file_name, bucketName, object_name)
+        audioTable.update_item(
+            Key={
+                'id': audioId,
+            },
+            UpdateExpression='SET midiLink = :val1',
+            ExpressionAttributeValues={
+                ':val1': userId + '/audioMidi/'+ file_name
+            }
+        )
+    except ClientError as e:
+        logging.error(e)
+        return False
+    return True
+
+@app.route('/')
+def index():
+    return "This is the main page."
+
 
 @app.route("/api/sheetMusic/<userId>/<sheetMusicId>", methods=['GET'])
 def sheetMusic(userId, sheetMusicId):
@@ -88,20 +106,19 @@ def sheetMusic(userId, sheetMusicId):
     time = 0
     channel = 0
     volume = 100
-
     selectedSheetMusicData = sheetMusicTable.get_item(
-        key={
+        Key={
             'id': sheetMusicId
         }
     )
 
     selectedSheetMusicData = selectedSheetMusicData['Item']
-    sheetMusicImage = s3.download_file('fypbucket105550-dev', 'public/' + userId + '/sheetImage/', selectedSheetMusicData['sheetLink'] )
+    s3.download_file(bucketName, 'public/' + selectedSheetMusicData['sheetLink'], 'currentImageFile' )
     midix.addTrackName(track, time, "Track")
     midix.addTempo(track, time, 110)
 
     # image setup
-    image_set = default(sheetMusicImage)
+    image_set = default('currentImageFile')
     word_set = []
     for i in range(len(image_set)):
         image = image_set[i]
@@ -127,7 +144,7 @@ def sheetMusic(userId, sheetMusicId):
 
     # gets the audio file
     for i in range(len(word_set)):
-        audio, duration, freq, notes = get_sinewave_audio(word_set[i])    
+        audio, duration, freq, notes = get_sinewave_audio(word_set[i])
         for i in range(len(notes)):
             if notes[i] != 'rest':
                 print(notes[i] , freq[i])
@@ -137,11 +154,23 @@ def sheetMusic(userId, sheetMusicId):
     # datetime object containing current date and time
     now = datetime.now()
     dt_string = now.strftime("%d-%m-%Y%H-%M-%S")
-    binfile = open("output/output" + userId + imageId + ".mid", 'wb')
+    binfile = open("processedAudio" + ".mid", 'wb')
     midix.writeFile(binfile)
     binfile.close()
-    success = upload_sheetMusic_Midi_file(binfile, 'fypbucket105550-dev', userId, imageId, sheetMusicId,  'public/' + userId + '/sheetMidi/'+ imageId )
-    return success
+    success = upload_sheetMusic_Midi_file('processedAudio.mid', userId, sheetMusicId,  'public/' + userId + '/sheetMidi/'+ 'processedAudio.mid' )
+    return 'ok'
+
+
+@app.route("/api/sheetMusic/<userId>/<audioId>", methods=['GET'])
+def audioClip(userId, audioId):
+    selectedAudioData = audioTable.get_item(
+        Key={
+            'id': audioId
+        }
+    )
+    s3.download_file(bucketName, 'public/' + selectedAudioData['audioLink'], 'currentAudioFile' )
+    songName = audioProcess.processAudio('currentAudioFile')
+    success = upload_audio_Midi_file('processedAudioMidiClip.mid', userId, audioId,  'public/' + userId + '/audioMidi/'+ 'processedAudioMidiClip.mid' )
 
 if __name__ == '__main__':
     app.run()
