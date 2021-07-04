@@ -7,9 +7,21 @@ from midiutil.MidiFile import MIDIFile
 from datetime import datetime
 
 from crop_image import default
+
+# %config InlineBackend.figure_format = 'retina'
+
+# import pretty_midi as pm
+# import librosa     as lbr
+# from   librosa.display     import specshow
+
+# from keras.models          import load_model
+# from keras.utils.vis_utils import model_to_dot
+
+################## flask
+
 from flask import Flask
+from flask_cors import CORS
 import boto3
-import audioProcess
 
 tf.reset_default_graph()
 sess = tf.InteractiveSession()
@@ -41,58 +53,65 @@ WIDTH_REDUCTION, HEIGHT = sess.run([width_reduction_tensor, height_tensor])
 decoded, _ = tf.nn.ctc_greedy_decoder(logits, seq_len)
 
 app = Flask(__name__)
+CORS(app)
 s3 = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 sheetMusicTable = dynamodb.Table('Sheet-zo3cmm6a6fblhpk6g4trt53aju-dev')
-audioTable = dynamodb.Table('Audio-zo3cmm6a6fblhpk6g4trt53aju-dev')
-bucketName = 'fypbucket105550-dev'
+audioTable = dynamodb.Table('')
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key, Attr
 
 
-def upload_sheetMusic_Midi_file(file_name,userId, sheetMusicId, object_name=None):
-    # If S3 object_name was not specified, use file_name
-    if object_name is None:
-        object_name = file_name
-
+def upload_sheetMusic_Midi_file(file_name, bucket,userId, imageId, sheetMusicId, object_name, link):
     # Upload the file
     try:
-        response = s3.upload_file(file_name, bucketName, object_name)
+        response = s3.upload_file(file_name, bucket, object_name)
+        response = s3.upload_file('sheetMidiHTML.html', bucket, link, ExtraArgs={'ContentType': "text/html"})
         sheetMusicTable.update_item(
             Key={
                 'id': sheetMusicId,
             },
             UpdateExpression='SET midiLink = :val1',
             ExpressionAttributeValues={
-                ':val1': userId + '/sheetMidi/'+ file_name
+                ':val1': userId + '/sheetMidi/'+ sheetMusicId + '/' + imageId
             }
         )
-    except ClientError as e:
-        logging.error(e)
-        return False
-    return True
-
-def upload_audio_Midi_file(file_name,userId, audioId, object_name=None):
-    # If S3 object_name was not specified, use file_name
-    if object_name is None:
-        object_name = file_name
-
-    # Upload the file
-    try:
-        response = s3.upload_file(file_name, bucketName, object_name)
-        audioTable.update_item(
+        sheetMusicTable.update_item(
             Key={
-                'id': audioId,
+                'id': sheetMusicId,
             },
-            UpdateExpression='SET midiLink = :val1',
+            UpdateExpression='SET midiHtmlFile = :val1',
             ExpressionAttributeValues={
-                ':val1': userId + '/audioMidi/'+ file_name
+                ':val1': userId + '/sheetMidiHTML/'+ sheetMusicId + '/' + 'sheetMidiHTML.html'
             }
         )
     except ClientError as e:
         logging.error(e)
         return False
     return True
+
+def createSheetHTML(link):
+    templateSheet = """
+<!-- Midi HTML -->
+<section id="sectionSheet">
+  <midi-visualizer
+    type="waterfall"
+    src="{midiSheetLink}"
+  ></midi-visualizer>
+  <midi-player
+    src="{midiSheetLink}"
+    sound-font
+    visualizer="#sectionSheet midi-visualizer"
+  ></midi-player>
+</section>
+
+<script src="https://cdn.jsdelivr.net/combine/npm/tone@14.7.58,npm/@magenta/music@1.21.0/es6/core.js,npm/focus-visible@5,npm/html-midi-player@1.1.1"></script>
+    """
+    contextSheet = {
+        "midiSheetLink": 'https://fypbucket105550-dev.s3.ap-south-1.amazonaws.com/' + link,
+    }
+    with  open('sheetMidiHTML.html','w') as myfile:
+        myfile.write(templateSheet.format(**contextSheet))
 
 @app.route('/')
 def index():
@@ -113,9 +132,9 @@ def sheetMusic(userId, sheetMusicId):
     )
 
     selectedSheetMusicData = selectedSheetMusicData['Item']
-    s3.download_file(bucketName, 'public/' + selectedSheetMusicData['sheetLink'], 'currentImageFile' )
+    s3.download_file('fypbucket105550-dev', 'public/' + selectedSheetMusicData['sheetLink'], 'currentImageFile' )
     midix.addTrackName(track, time, "Track")
-    midix.addTempo(track, time, 110)
+    midix.addTempo(track, time, 60)
 
     # image setup
     image_set = default('currentImageFile')
@@ -156,21 +175,12 @@ def sheetMusic(userId, sheetMusicId):
     dt_string = now.strftime("%d-%m-%Y%H-%M-%S")
     binfile = open("processedAudio" + ".mid", 'wb')
     midix.writeFile(binfile)
+    link = 'public/' + userId + '/sheetMidiHTML/'+ sheetMusicId +'/' + 'sheetMidiHTML.html'
+    htmlLink = 'public/' + userId + '/sheetMidi/'+ sheetMusicId +'/' +'processedAudio.mid'
+    createSheetHTML(htmlLink)
     binfile.close()
-    success = upload_sheetMusic_Midi_file('processedAudio.mid', userId, sheetMusicId,  'public/' + userId + '/sheetMidi/'+ 'processedAudio.mid' )
+    success = upload_sheetMusic_Midi_file('processedAudio.mid', 'fypbucket105550-dev', userId, 'processedAudio.mid', sheetMusicId,  'public/' + userId + '/sheetMidi/'+ sheetMusicId +'/' +'processedAudio.mid', link )
     return 'ok'
-
-
-@app.route("/api/audio/<userId>/<audioId>", methods=['GET'])
-def audioClip(userId, audioId):
-    selectedAudioData = audioTable.get_item(
-        Key={
-            'id': audioId
-        }
-    )
-    s3.download_file(bucketName, 'public/' + selectedAudioData['audioLink'], 'currentAudioFile' )
-    songName = audioProcess.processAudio('currentAudioFile')
-    success = upload_audio_Midi_file('processedAudioMidiClip.mid', userId, audioId,  'public/' + userId + '/audioMidi/'+ 'processedAudioMidiClip.mid' )
 
 if __name__ == '__main__':
     app.run()

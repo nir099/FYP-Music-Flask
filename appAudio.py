@@ -62,7 +62,7 @@ def processAudio(userAudioClip):
 
     intervals, frameLenSecs = {}, lbr.frames_to_time(1, rate) # Time is in absolute seconds, not relative MIDI ticks
     onsets = (onProb > .95).astype(np.int8)
-    frames = onsets | (actProb > .5).astype(np.int8) # Ensure that any frame with an onset prediction is considered active.
+    frames = onsets | (actProb > .8).astype(np.int8) # Ensure that any frame with an onset prediction is considered active.
 
     def EndPitch(pitch, endFrame):
         track.notes += [pm.Note(int(volProb[intervals[pitch], pitch] * 80 + 10), pitch + 21,
@@ -102,14 +102,12 @@ def processAudio(userAudioClip):
     return True
 
 
-def upload_audio_Midi_file(file_name,userId, audioId, object_name=None):
-    # If S3 object_name was not specified, use file_name
-    if object_name is None:
-        object_name = file_name
+def upload_audio_Midi_file(file_name,userId, audioId, object_name, link):
 
     # Upload the file
     try:
         response = s3.upload_file(file_name, bucketName, object_name)
+        response = s3.upload_file('audioMidiHTML.html', bucketName, link, ExtraArgs={'ContentType': "text/html"})
         audioTable.update_item(
             Key={
                 'id': audioId,
@@ -117,6 +115,16 @@ def upload_audio_Midi_file(file_name,userId, audioId, object_name=None):
             UpdateExpression='SET midiLink = :val1',
             ExpressionAttributeValues={
                 ':val1': userId + '/audioMidi/'+ audioId + '/' + file_name
+            }
+        )
+
+        audioTable.update_item(
+            Key={
+                'id': audioId,
+            },
+            UpdateExpression='SET audioHtmlFile = :val1',
+            ExpressionAttributeValues={
+                ':val1': userId + '/audioMidiHTML/'+ audioId + '/' + 'audioMidiHTML.html'
             }
         )
     except ClientError as e:
@@ -154,7 +162,7 @@ def ReportWrite(output):
         Report.write("\n")
         index = 1
         for q in output:
-            Report.write(index + ' ' + q)
+            Report.write(str(index) + ' ' + q)
             index += 1
             Report.write("\n")
     else:
@@ -172,31 +180,51 @@ def CompareMidi(t1,t2):
     track2=[]
 
     for msg in mid1.tracks[1]:
-        if (msg.type=='note_on' and int(str(msg).split(' ')[3].split('=')[1]) > 0):
+        if (msg.type=='note_on' and (int(str(msg).split(' ')[3].split('=')[1]) > 0 and int(str(msg).split(' ')[4].split('=')[1]) >= 0)):
            track1.append([msg.note,msg.time])
     for msg in mid2.tracks[1]:
         if (msg.type=='note_off'):
            track2.append([msg.note,msg.time])
 
-    no1=int(len(track1)/2)
+    no1=len(track1)
     no2=len(track2)
     lenrun = no1
-    if(no2 > no1 ):
+    if(no2 < no1 ):
       lenrun = no2
-    for i in range(0,no2):
-        if(no1==no2):
+    for i in range(0,lenrun):
+        if(track1[i][0]==track2[i][0]):
+            output.append(lbr.midi_to_note(track1[i][0])+"     "+lbr.midi_to_note(track2[i][0])+"     Correct")
+            #output.append(chr(track1[i][0])+" "+str(track1[i][1])+" "+chr(track2[i][0])+" "+str(track2[i][1])+" Correct")
 
-            if(track1[i][0]==track2[i][0]):
-                output.append(lbr.midi_to_note(track1[i][0])+"     "+lbr.midi_to_note(track2[i][0])+"     Correct")
-                #output.append(chr(track1[i][0])+" "+str(track1[i][1])+" "+chr(track2[i][0])+" "+str(track2[i][1])+" Correct")
-
-            else:
-                output.append(lbr.midi_to_note(track1[i][0])+"     "+lbr.midi_to_note(track2[i][0])+"     Wrong")
-                #output.append(chr(track1[i][0])+" "+str(track1[i][1])+" "+chr(track2[i][0])+" "+str(track2[i][1])+" Wrong")
         else:
-            output.append("Note count is not same")
-            break
+            output.append(lbr.midi_to_note(track1[i][0])+"     "+lbr.midi_to_note(track2[i][0])+"     Wrong")
+            #output.append(chr(track1[i][0])+" "+str(track1[i][1])+" "+chr(track2[i][0])+" "+str(track2[i][1])+" Wrong")
+
     return output
+
+def createAudioHTML(link):
+    templateAudio = """
+<!-- Midi HTML -->
+<section id="sectionAudio">
+  <midi-visualizer
+    type="waterfall"
+    src="{midiAudioLink}"
+  ></midi-visualizer>
+  <midi-player
+    src="{midiAudioLink}"
+    sound-font
+    visualizer="#sectionAudio midi-visualizer"
+  ></midi-player>
+</section>
+
+<script src="https://cdn.jsdelivr.net/combine/npm/tone@14.7.58,npm/@magenta/music@1.21.0/es6/core.js,npm/focus-visible@5,npm/html-midi-player@1.1.1"></script>
+"""
+    contextAudio = {
+        "midiAudioLink": 'https://' + bucketName + '.s3.ap-south-1.amazonaws.com/' + link,
+    }
+    with  open('audioMidiHTML.html','w') as myfile:
+        myfile.write(templateAudio.format(**contextAudio))
+    return True
 
 @app.route('/')
 def index():
@@ -216,7 +244,10 @@ def audioClip(userId, audioId):
     selectedAudioData = selectedAudioData['Item']
     s3.download_file(bucketName, 'public/' + selectedAudioData['audioLink'], 'currentAudioFile' )
     processAudio('currentAudioFile')
-    success = upload_audio_Midi_file('processedAudioMidiClip.mid', userId, audioId,  'public/' + userId + '/audioMidi/'+ audioId + '/' +'processedAudioMidiClip.mid' )
+    link = 'public/' + userId + '/audioMidiHTML/'+ audioId + '/' +'audioMidiHTML.html'
+    htmlLink = 'public/' + userId + '/audioMidi/'+ audioId + '/' +'processedAudioMidiClip.mid'
+    createAudioHTML(htmlLink)
+    success = upload_audio_Midi_file('processedAudioMidiClip.mid', userId, audioId,  'public/' + userId + '/audioMidi/'+ audioId + '/' +'processedAudioMidiClip.mid', link )
     return 'ok'
 
 @app.route("/api/compare/<userId>", methods=['POST'])
